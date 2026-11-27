@@ -23,13 +23,13 @@ No third-party packages or running database service are required.
 
 ### Per-Execution Log Trace
 
-![Executions](Images/Screenshot 2026-11-27 at 1.02.38 PM.png)
+![Executions](Images/Executions.png)
 
 
 
 ### Per Log Record Trace
 
-![](Images/Screenshot 2026-11-27 at 1.06.24 PM.png)
+![Logs](Images/Logs.png)
 
 ## Build and open
 
