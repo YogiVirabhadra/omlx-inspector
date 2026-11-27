@@ -1,0 +1,9 @@
+.build/
+.build-xcode/
+build/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+Screenshots/
+*.log
+__pycache__/
