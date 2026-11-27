@@ -60,6 +60,7 @@ public struct LogSnapshot: Sendable {
     public var warnings: [String]
     public var generation: String = ""
     public var hasPartialRecord = false
+    public var records: [IndexedLogRecord] = []
     public var requestCount: Int { turns.reduce(0) { $0 + $1.requests } }
     public var callCount: Int { turns.reduce(0) { $0 + $1.calls } }
 }
@@ -89,6 +90,7 @@ public struct RequestContinuation: Sendable {
     public var reason: String
     public var totalMessages: Int
     public var retainedMessages: Int?
+    public var explanation: String? = nil
     public var messageDescription: String {
         guard let retainedMessages else { return "\(totalMessages) messages in context" }
         let added = totalMessages - retainedMessages

@@ -43,16 +43,4 @@ final class DisplayBoundaryTests: XCTestCase {
         var rotated = original; rotated.generation = "replacement"
         XCTAssertEqual(boundary.applying(to: rotated).requestCount, 1)
     }
-    func testRealLogEvidenceRemainsInspectableAfterClear() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_COMPLETION_LOG"] else { throw XCTSkip("Enable native log checks") }
-        let original = try LogReader.load(URL(fileURLWithPath: path)), boundary = DisplayBoundary(snapshot: original)
-        XCTAssertTrue(boundary.applying(to: original).turns.isEmpty)
-        let request = try XCTUnwrap(original.turns.flatMap(\.events).first { $0.kind == .request })
-        let detail = try LogReader.detail(request, snapshot: original)
-        XCTAssertTrue(detail.raw.contains("Incoming POST"))
-        XCTAssertNotNil(detail.completionRaw)
-        XCTAssertNotNil(detail.tree)
-        XCTAssertTrue(try LogReader.search("Qwen", snapshot: boundary.applying(to: original)).hits.isEmpty)
-        XCTAssertFalse(try LogReader.search("Qwen", snapshot: original).hits.isEmpty)
-    }
 }

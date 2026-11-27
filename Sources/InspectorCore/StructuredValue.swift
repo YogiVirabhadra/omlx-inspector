@@ -103,6 +103,7 @@ extension LogReader {
         lines.append("Messages: \(messages.count) total" + (retained.map { ", \(messages.count - $0) newly introduced, \($0) retained" } ?? ""))
         lines.append("Available tools: \((request["tools"] as? [Any])?.count ?? 0)")
         if let continuation { lines += ["", continuation.reason] }
+        if let explanation = continuation?.explanation { lines.append(explanation) }
         if let retained {
             let counts = Dictionary(grouping: messages.prefix(retained), by: { $0["role"] as? String ?? "unknown" })
                 .sorted { $0.key < $1.key }.map { "\($0.value.count) \($0.key)" }.joined(separator: " · ")

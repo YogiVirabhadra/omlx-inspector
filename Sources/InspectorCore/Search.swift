@@ -57,7 +57,7 @@ public extension LogReader {
                       "Completion status: unverified · scheduler finish or generated output alone does not establish the server finish reason"]
         }
         if m.possibleReset {
-            lines.append("Possible context reset or instruction change. Comparison uses a unique overlapping history with the same latest user message; continuity is NOT established and conversations were not merged.")
+            lines.append("Possible history rewrite, context reset, or instruction change. Comparison uses a unique overlapping history with the same latest user message; continuity is NOT established and conversations were not merged.")
         }
         if m.previousRequest != nil {
             lines.append(m.changedFields.isEmpty ? "Request settings and system instructions unchanged." : "Changed request fields: " + m.changedFields.joined(separator: ", "))

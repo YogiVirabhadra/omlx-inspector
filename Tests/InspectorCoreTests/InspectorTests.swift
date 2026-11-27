@@ -134,12 +134,4 @@ final class InspectorTests: XCTestCase {
         XCTAssertEqual(newTurn.timelineCycles(showContext:false).last?.number, 1)
         XCTAssertNil(snapshot.turns.first?.events.first { $0.kind == .request }?.continuation?.retainedMessages)
     }
-    func testActualLogWhenExplicitlyProvided() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_TEST_LOG"] else { throw XCTSkip("Set INSPECTOR_TEST_LOG for local read-only integration verification") }
-        let start = Date(); let s = try LogReader.load(URL(fileURLWithPath: path))
-        XCTAssertGreaterThan(s.requestCount, 0)
-        for e in s.turns.flatMap(\.events) { XCTAssertFalse(try LogReader.detail(e, snapshot: s).raw.isEmpty) }
-        let outputs = s.turns.flatMap(\.events).filter { $0.kind == .output }.count
-        print("LOCAL VERIFICATION: requests=\(s.requestCount) calls=\(s.callCount) outputs=\(outputs) turns=\(s.turns.count) load+all-details=\(Date().timeIntervalSince(start))s")
-    }
 }

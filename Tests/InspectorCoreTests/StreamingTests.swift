@@ -175,6 +175,8 @@ final class StreamingTests: XCTestCase {
         let start = Date(); var index = LogIndex(url:url)
         let snapshot = try XCTUnwrap(index.refresh()?.snapshot)
         XCTAssertGreaterThanOrEqual(snapshot.size,UInt64(size)); XCTAssertEqual(snapshot.requestCount,1)
+        XCTAssertEqual(snapshot.records.count, snapshot.recordCount)
+        XCTAssertTrue(try LogReader.detail(XCTUnwrap(snapshot.records.first), snapshot: snapshot).raw.contains("omlx.cache"))
         XCTAssertTrue(try LogReader.detail(snapshot.turns[0].events[0],snapshot:snapshot).readable.contains("café"))
         XCTAssertNil(try index.refresh())
         let previousBytes = index.bytesRead

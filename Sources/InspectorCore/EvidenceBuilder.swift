@@ -54,7 +54,11 @@ struct EvidenceBuilder: Sendable {
             consumeCompletion(r); return
         }
         if r.logger == "omlx.scheduler", let m = LogReader.captures(#"^Added request (\S+) with (\d+) prompt tokens"#, r.body) {
-            if pending.count == 1 && active.isEmpty {
+            // Already-attributed active UUIDs are not candidates for this new
+            // scheduler admission. Keep matching one unmatched incoming request
+            // even while those older requests run. An unattributed active UUID
+            // or multiple pending arrivals still prevents a safe association.
+            if pending.count == 1 && active.allSatisfy({ scheduler[$0] != nil }) {
                 let p = pending[0]; scheduler[m[0]] = p
                 if completionWindow?.turn == p.turn && completionWindow?.event == p.event {
                     completionWindow?.schedulerID = m[0]
@@ -62,7 +66,7 @@ struct EvidenceBuilder: Sendable {
                 turns[p.turn].events[p.event].requestID = m[0]
                 turns[p.turn].events[p.event].metrics?.promptTokens = Int(m[1])
                 turns[p.turn].events[p.event].metrics?.schedulerStart = r.timestamp
-                turns[p.turn].events[p.event].note += " Scheduler association inferred from an isolated request sequence; \(m[1]) prompt tokens reported by scheduler."
+                turns[p.turn].events[p.event].note += " Scheduler association inferred: one unmatched incoming request at admission, with all earlier active scheduler UUIDs already attributed; \(m[1]) prompt tokens reported by scheduler."
             } else {
                 completionWindow = nil
                 if !pending.isEmpty { warn("Overlapping or ambiguous requests were not paired to scheduler output.") }
@@ -127,13 +131,23 @@ struct EvidenceBuilder: Sendable {
             chain = SHA256.hash(data: Data((chain + hash).utf8)).description
             return chain
         }
-        let candidates = chains.dropLast().flatMap { historyChains[$0] ?? [] }
+        // A repeated rich history can be a retry/replay. Opening-only prompts may be
+        // unrelated sessions and must not merge simply because their text matches.
+        let richHistory = messages.contains { ["assistant", "tool"].contains($0["role"] as? String ?? "") }
+        let exact = richHistory ? historyChains[chain] ?? [] : []
+        let candidates = exact.isEmpty ? chains.dropLast().flatMap { historyChains[$0] ?? [] } : exact
         let bestLength = candidates.map { histories[$0].count }.max() ?? 0
         let best = candidates.filter { histories[$0].count == bestLength }
         let seenUsers = messages.indices.filter { messages[$0]["role"] as? String == "user" }
-        let matched = best.count == 1 ? best.first.flatMap { i in
-            histories[i].headHashes != nil || isUserBranch(from: i, hashes: hashes, users: Set(seenUsers)) ? i : nil
-        } : nil
+        // Replays create several checkpoints of one history, not competing origins.
+        // Resolve only within one already-inferred group/turn and matching model.
+        let origin = best.first.map { histories[$0] }
+        let uniqueOrigin = origin.map { h in best.allSatisfy {
+            histories[$0].group == h.group && histories[$0].turn == h.turn && histories[$0].fields["model"] == fields["model"]
+        } } ?? false
+        let matched = uniqueOrigin ? best.reversed().first(where: { i in
+            !exact.isEmpty || histories[i].headHashes != nil || isUserBranch(from: i, hashes: hashes, users: Set(seenUsers))
+        }) : nil
         let group: Int; var turn: Int; let skip: Int
         if let i = matched {
             group = histories[i].group; turn = histories[i].turn; skip = histories[i].count
@@ -200,6 +214,8 @@ struct EvidenceBuilder: Sendable {
         let reason: String
         if let user = addedMessages.last(where: { $0["role"] as? String == "user" }), Self.backgroundNotification(LogReader.string(user["content"])) != nil {
             reason = "Responding to a background-process notification"
+        } else if matched != nil && skip == messages.count {
+            reason = "Repeated request history (retry or replay)"
         } else if matched == nil {
             reason = "Starting this turn"
         } else if addedMessages.contains(where: { $0["role"] as? String == "user" }) {
@@ -221,14 +237,12 @@ struct EvidenceBuilder: Sendable {
         } else {
             reason = "Continuing with new conversation context"
         }
-        let continuation = RequestContinuation(reason: reason, totalMessages: messages.count, retainedMessages: matched == nil ? nil : skip)
         var metrics = RequestMetrics(model: model)
         let possible = matched == nil ? (lastUser.flatMap { historiesByUser[$0] } ?? []).filter {
             let h = histories[$0]
             guard let headHashes = h.headHashes else { return false }
             return lastUser != nil && h.lastUser == lastUser && h.chain != chain &&
-                Set(headHashes).intersection(hashes).count >= 2 &&
-                (hashes.count < h.count || fields["system instructions"] != h.fields["system instructions"])
+                Set(headHashes).intersection(hashes).count >= 2
         } : []
         if let prior = matched ?? (possible.count == 1 ? possible.first : nil) {
             let h = histories[prior]
@@ -237,7 +251,22 @@ struct EvidenceBuilder: Sendable {
             metrics.possibleReset = matched == nil
             metrics.changedFields = Set(fields.keys).union(h.fields.keys).filter { fields[$0] != h.fields[$0] }.sorted()
         }
-        let event = InspectorEvent(id: "r\(r.source.offset)", kind: .request, title: "Request \(n)", summary: "\(model) · \(messages.count) messages · \(toolCount) tool definitions", timestamp: r.timestamp, note: "Observed incoming request. \(skip) unchanged messages suppressed in the timeline. Complete history, system instructions, reasoning fields, tools, and parameters remain in Structured / Source.", evidence: Evidence(source: r.source), continuation: continuation, metrics: metrics)
+        let explanation: String
+        if matched != nil {
+            explanation = skip == messages.count
+                ? "Identical complete history in one inferred conversation; shown as another inference. A retry cannot be distinguished from a replay."
+                : "Continuation inferred from an exact earlier message-history prefix, independent of intervening requests from other streams."
+        } else if !best.isEmpty {
+            explanation = uniqueOrigin
+                ? "History diverged from an older checkpoint outside a verified user-message branch. Kept separate to avoid joining rewritten histories."
+                : "Several earlier histories or different models could explain this request. No unique predecessor; kept separate."
+        } else if metrics.possibleReset {
+            explanation = "History changed, was shortened, or had instructions rewritten. A comparison candidate is available; conversation continuity is unverified."
+        } else {
+            explanation = "No exact earlier message-history prefix was found. This may be a new conversation, changed history, or a conversation that began in another log."
+        }
+        let continuation = RequestContinuation(reason: reason, totalMessages: messages.count, retainedMessages: matched == nil ? nil : skip, explanation: explanation)
+        let event = InspectorEvent(id: "r\(r.source.offset)", kind: .request, title: "Request \(n)", summary: "\(model) · \(messages.count) messages · \(toolCount) tool definitions", timestamp: r.timestamp, note: "Observed incoming request. \(skip) unchanged messages suppressed in the timeline. \(explanation) Complete history, system instructions, reasoning fields, tools, and parameters remain in Structured / Source.", evidence: Evidence(source: r.source), continuation: continuation, metrics: metrics)
         if completionOpen == 1 && !completionOverlap {
             completionWindow = CompletionWindow(turn: turn, event: turns[turn].events.count)
         }

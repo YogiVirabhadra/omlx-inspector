@@ -22,7 +22,7 @@ import InspectorCore
             CommandGroup(after: .textEditing) {
                 Button("Clear Display") { workspace.clearDisplay() }.keyboardShortcut("k")
                     .disabled(workspace.snapshot == nil || workspace.loading || workspace.pendingReplacement != nil)
-                Button("Search Events…") { workspace.searchPresented = true }.keyboardShortcut("f")
+                Button("Search…") { workspace.searchPresented = true }.keyboardShortcut("f")
                 Button("Return to Live") { workspace.monitoring = true; workspace.followLatest() }.keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandGroup(after: .sidebar) {
@@ -36,12 +36,21 @@ struct InspectorWindow: View {
     @Bindable var workspace: Workspace
     @FocusState private var timelineFocused: Bool
     var body: some View {
-        NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 330)
-        } detail: {
-            HSplitView {
-                timeline.frame(minWidth: 370, idealWidth: 620, maxWidth: .infinity)
-                if workspace.inspector { inspector.frame(minWidth: 320, idealWidth: 440, maxWidth: .infinity) }
+        Group {
+            if workspace.browsingMode == "Log Records" {
+                HSplitView {
+                    LogRecordBrowser(workspace: workspace).frame(minWidth: 370, idealWidth: 520, maxWidth: .infinity)
+                    LogRecordInspector(workspace: workspace).frame(minWidth: 380, idealWidth: 700, maxWidth: .infinity)
+                }
+            } else {
+                NavigationSplitView {
+                    sidebar.navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 330)
+                } detail: {
+                    HSplitView {
+                        timeline.frame(minWidth: 370, idealWidth: 620, maxWidth: .infinity)
+                        if workspace.inspector { inspector.frame(minWidth: 320, idealWidth: 440, maxWidth: .infinity) }
+                    }
+                }
             }
         }
         .toolbar {
@@ -52,7 +61,10 @@ struct InspectorWindow: View {
                 HStack(spacing: 7) {
                     Image(systemName: "waveform.path").foregroundStyle(.teal)
                     Text("oMLX Inspector").fontWeight(.semibold)
-                    Text("LIVE INSPECTOR").font(.system(size: 9, weight: .bold, design: .rounded)).padding(.horizontal, 5).padding(.vertical, 3).background(.quaternary, in: Capsule())
+                    Picker("Browse", selection: $workspace.browsingMode) {
+                        Text("Executions").tag("Executions")
+                        Text("Log Records").tag("Log Records")
+                    }.pickerStyle(.segmented).frame(width: 230).help("Browse reconstructed executions or every original log record")
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
@@ -62,7 +74,7 @@ struct InspectorWindow: View {
                     .labelStyle(.titleAndIcon)
                     .disabled(workspace.snapshot == nil || workspace.loading || workspace.pendingReplacement != nil)
                     .help("Hide current activity and follow new log activity. The log stays untouched (⌘K).")
-                Button { workspace.searchPresented = true } label: { Label("Search Events", systemImage: "magnifyingglass") }.help("Search complete event content (⌘F)").disabled(workspace.snapshot == nil)
+                Button { workspace.searchPresented = true } label: { Label("Search", systemImage: "magnifyingglass") }.help("Search complete content in the current mode (⌘F)").disabled(workspace.snapshot == nil)
                 Toggle(isOn: $workspace.monitoring) { Label("Monitor Log", systemImage: "waveform") }.toggleStyle(.button).accessibilityLabel("Monitor Log").help("Read appended records while the application is open")
                 Menu {
                     if !workspace.rotatedSources.isEmpty {
@@ -73,7 +85,7 @@ struct InspectorWindow: View {
                     Picker("Appearance", selection: $workspace.appearance) { ForEach(["System", "Light", "Dark"], id: \.self) { Text($0) } }
                     Toggle("Show carried assistant context", isOn: $workspace.showContext)
                 } label: { Label("View Options", systemImage: "slider.horizontal.3") }
-                Button { workspace.inspector.toggle() } label: { Label("Toggle Inspector", systemImage: "sidebar.right") }.help("Show or hide details (⌥⌘I)")
+                Button { workspace.inspector.toggle() } label: { Label("Toggle Inspector", systemImage: "sidebar.right") }.help("Show or hide details (⌥⌘I)").disabled(workspace.browsingMode == "Log Records")
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { status }
@@ -98,7 +110,10 @@ struct InspectorWindow: View {
             }
         }
         .task { workspace.restore() }
-        .sheet(isPresented: $workspace.searchPresented) { EventSearch(workspace: workspace) }
+        .sheet(isPresented: $workspace.searchPresented) {
+            if workspace.browsingMode == "Log Records" { LogRecordSearch(workspace: workspace) }
+            else { EventSearch(workspace: workspace) }
+        }
         .alert("Unable to open log", isPresented: Binding(get: { workspace.error != nil }, set: { if !$0 { workspace.error = nil } })) { Button("OK") { workspace.error = nil } } message: { Text(workspace.error ?? "") }
         .onChange(of: workspace.turnID) { workspace.selectTurn() }
         .onChange(of: workspace.eventID) { workspace.selectEvent() }
@@ -298,6 +313,8 @@ struct InspectorWindow: View {
                         }
                         if e.linkedEvent != nil { Button(e.kind == .call ? "View result →" : "View call →") { workspace.related() }.buttonStyle(.link) }
                     }.font(.caption)
+                    Button("View log record →") { workspace.viewLogRecord(completion: workspace.mode == "Source" && workspace.completionSource) }
+                        .buttonStyle(.link).font(.caption).help("Open this exact source record in Log Records")
                     Picker("Representation", selection: $workspace.mode) {
                         Text("Readable").tag("Readable"); Text("Structured").tag("Structured"); Text("Source").tag("Source")
                     }.pickerStyle(.segmented).labelsHidden()

@@ -16,8 +16,10 @@ public struct DisplayBoundary: Sendable {
     }
     private let generation: String
     private let revisions: [String: Revision]
+    private let lastRecord: SourceRef?
     public init(snapshot: LogSnapshot) {
         generation = snapshot.generation
+        lastRecord = snapshot.records.last?.source
         revisions = Dictionary(snapshot.turns.flatMap(\.events).map { ($0.id, Revision($0)) }, uniquingKeysWith: { _, last in last })
     }
     public func includes(_ event: InspectorEvent, generation: String) -> Bool {
@@ -25,11 +27,16 @@ public struct DisplayBoundary: Sendable {
     }
     public func applying(to snapshot: LogSnapshot) -> LogSnapshot {
         var display = snapshot
+        display.records = snapshot.records.filter { includes($0, generation: snapshot.generation) }
         display.turns = snapshot.turns.compactMap { turn in
             var visible = turn
             visible.events = turn.events.filter { includes($0, generation: snapshot.generation) }
             return visible.events.isEmpty ? nil : visible
         }
         return display
+    }
+    public func includes(_ record: IndexedLogRecord, generation: String) -> Bool {
+        guard self.generation == generation, let lastRecord else { return true }
+        return record.source.offset > lastRecord.offset || (record.source.offset == lastRecord.offset && record.source != lastRecord)
     }
 }

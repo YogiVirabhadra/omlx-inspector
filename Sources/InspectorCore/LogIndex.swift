@@ -20,6 +20,7 @@ public struct LogIndex: Sendable {
     private var builder = EvidenceBuilder()
     private var buffer = Data(), recordBytes = Data()
     private var current: LogRecord?
+    private var records: [IndexedLogRecord] = []
     private var offset: UInt64 = 0
     private var line = 1, count = 0
     private var lastSnapshot: LogSnapshot?
@@ -68,22 +69,26 @@ public struct LogIndex: Sendable {
         next.head = try read(0, Int(min(4096, newSize)))
         next.tail = try read(newSize - min(4096, newSize), Int(min(4096, newSize)))
         var preview = next.builder
+        var indexedRecords = next.records
         if var c = next.current {
             c.source.digest = SHA256.hash(data: next.recordBytes).description
             try preview.consume(c)
+            indexedRecords.append(IndexedLogRecord(c))
         }
         if !next.buffer.isEmpty {
             // Do not withdraw the preceding complete evidence while the next line
             // is arriving. The fragment has its own source reference until framed.
             let ref = SourceRef(offset: next.offset, length: next.buffer.count, line: next.line, endLine: next.line,
                                 digest: SHA256.hash(data: next.buffer).description)
-            try preview.consume(LogRecord(source: ref, timestamp: "", logger: "unknown", level: "WARNING",
-                                          body: "Incomplete final record at current boundary"))
+            let partial = LogRecord(source: ref, timestamp: "", logger: "unknown", level: "WARNING",
+                                    body: "Incomplete final record at current boundary")
+            try preview.consume(partial)
+            indexedRecords.append(IndexedLogRecord(partial))
         }
         preview.finish()
         let snapshot = LogSnapshot(url: url, size: newSize, inode: newInode, modified: newModified,
                                    turns: preview.turns, recordCount: next.count + (next.current == nil ? 0 : 1) + (next.buffer.isEmpty ? 0 : 1), warnings: preview.warnings,
-                                   generation: next.generation, hasPartialRecord: !next.buffer.isEmpty)
+                                   generation: next.generation, hasPartialRecord: !next.buffer.isEmpty, records: indexedRecords)
         next.lastSnapshot = snapshot
         self = next
         return IndexUpdate(snapshot: snapshot, reset: reason != nil, recovery: reason)
@@ -108,10 +113,11 @@ public struct LogIndex: Sendable {
             if var c = current {
                 c.source.digest = SHA256.hash(data: recordBytes).description
                 try builder.consume(c); count += 1
+                records.append(IndexedLogRecord(c))
             }
             recordBytes = Data()
-            let parts = (1...4).map { String(text[Range(m.range(at: $0), in: text)!]) }
-            current = LogRecord(source: SourceRef(offset: offset, length: data.count, line: line, endLine: line), timestamp: parts[0], logger: parts[1], level: parts[2], body: parts[3])
+            let parts = (1...5).map { String(text[Range(m.range(at: $0), in: text)!]) }
+            current = LogRecord(source: SourceRef(offset: offset, length: data.count, line: line, endLine: line), timestamp: parts[0], logger: parts[1], level: parts[2], body: parts[4], context: parts[3])
         } else if var c = current {
             c.body += "\n" + text; c.source.length += data.count; c.source.endLine = line; current = c
         } else if !text.isEmpty {

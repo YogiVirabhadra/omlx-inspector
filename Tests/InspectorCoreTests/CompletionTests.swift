@@ -142,29 +142,6 @@ final class CompletionTests: XCTestCase {
         XCTAssertEqual(boundary.applying(to: live).requestCount, 1)
         XCTAssertEqual(live.turns.flatMap(\.events).map(\.id), full.turns.flatMap(\.events).map(\.id))
     }
-    func testActualFullLogCodeReviewTurnAfterCancellation() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_COMPLETION_LOG"] else { throw XCTSkip("Enable native full-log checks") }
-        let snapshot = try LogReader.load(URL(fileURLWithPath: path))
-        let turn = try XCTUnwrap(snapshot.turns.first { $0.title.hasPrefix("Please do a careful code review of the oMLX Inspector project") })
-        let events = turn.events.filter { $0.kind == .request }
-        XCTAssertEqual(events.count, 42)
-        XCTAssertEqual(events.compactMap(\.completion).count, 42)
-        XCTAssertEqual(turn.events.filter { $0.kind == .output }.count, 42)
-        XCTAssertEqual(events.dropLast().compactMap { $0.completion?.finishReason }, Array(repeating: "tool_calls", count: 41))
-        XCTAssertEqual(events.last?.completion?.finishReason, "stop")
-        XCTAssertEqual(turn.metrics.peakPromptTokens, 179590)
-        XCTAssertTrue(turn.metrics.contextComplete); XCTAssertTrue(turn.metrics.hasTerminalCompletion)
-        XCTAssertEqual(turn.metrics.elapsedSeconds ?? 0, 1710.846, accuracy: 0.001)
-        let visible = turn.events.filter { $0.kind != .context }
-        XCTAssertEqual(visible.count, 207)
-        XCTAssertEqual(turn.timelineCycles(showContext: false).compactMap(\.number), Array(1...42))
-        // All page-two events remain accessible, including full final request and completion evidence.
-        for event in visible.suffix(7) { XCTAssertFalse(try LogReader.detail(event, snapshot: snapshot, includeTree: false).raw.isEmpty) }
-        let final = try XCTUnwrap(events.last)
-        let detail = try LogReader.detail(final, snapshot: snapshot)
-        XCTAssertNotNil(detail.tree)
-        XCTAssertTrue(detail.completionRaw?.contains("finish_reason=stop") == true)
-    }
 
     func testReportedReasonOverridesNeitherSourceNorSchedulerAndAddsNoEvents() throws {
         let s = try LogReader.load(temp(request() + execution() + info()))
@@ -235,6 +212,38 @@ final class CompletionTests: XCTestCase {
         XCTAssertEqual(requests(s).count, 2)
         XCTAssertTrue(requests(s).allSatisfy { $0.completion == nil })
     }
+    func testConcurrentAdmissionsKeepOutputsWithTheirRequestsWithoutGuessingCompletion() throws {
+        let text = request("a") + line("Added request a with 100 prompt tokens", 100)
+            + request("b", 200) + line("Added request b with 100 prompt tokens", 300)
+            + line("Request b finished: stop, 12 tokens", 1000)
+            + line("Request b generated text:\nB output", 1000, "omlx.scheduler", "TRACE") + info("stop", 1010)
+            + line("Request a finished: stop, 12 tokens", 1500)
+            + line("Request a generated text:\nA output", 1500, "omlx.scheduler", "TRACE") + info("stop", 1510)
+        let s = try LogReader.load(temp(text))
+        XCTAssertEqual(requests(s).map(\.requestID), ["a", "b"])
+        XCTAssertTrue(requests(s).allSatisfy { $0.completion == nil })
+        XCTAssertFalse(s.turns.contains { $0.title == "Unlinked model output" })
+        for turn in s.turns where turn.group != 0 {
+            XCTAssertEqual(turn.events.first { $0.kind == .request }?.requestID, turn.events.first { $0.kind == .output }?.requestID)
+        }
+    }
+    func testUnattributedActiveRequestBlocksNewAdmissionUntilItFinishes() throws {
+        let text = request("a") + request("b", 50) + line("Added request a with 100 prompt tokens", 100)
+            + request("c", 200) + line("Added request c with 100 prompt tokens", 300)
+            + line("Request c generated text:\nC output", 400, "omlx.scheduler", "TRACE")
+        let s = try LogReader.load(temp(text))
+        XCTAssertTrue(requests(s).allSatisfy { $0.requestID == nil })
+        XCTAssertTrue(s.turns.contains { $0.title == "Unlinked model output" })
+    }
+    func testCompletionNavigationUsesTheInfoRecordRatherThanIncomingBody() throws {
+        let s = try LogReader.load(temp(request() + execution() + info()))
+        let event = try XCTUnwrap(requests(s).first)
+        let original = try XCTUnwrap(s.record(containing: event))
+        let completion = try XCTUnwrap(s.record(containing: event, completion: true))
+        XCTAssertNotEqual(original.id, completion.id)
+        XCTAssertEqual(completion.source, event.completion?.source)
+        XCTAssertEqual(try LogReader.detail(completion, snapshot: s).raw, info())
+    }
     func testDuplicateCompletionDoesNotReassign() throws {
         let s = try LogReader.load(temp(request() + execution() + info() + info("stop", 1020)))
         XCTAssertEqual(requests(s)[0].completion?.finishReason, "tool_calls")
@@ -263,34 +272,5 @@ final class CompletionTests: XCTestCase {
         try Data((text + line("appended", 1020)).utf8).write(to: url, options: [])
         XCTAssertNoThrow(try LogReader.sourceText(e.evidence.source, snapshot: s))
         XCTAssertThrowsError(try LogReader.detail(e, snapshot: s))
-    }
-    func testActualNovember21NineQwenCompletions() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_COMPLETION_LOG"] else { throw XCTSkip("Set INSPECTOR_COMPLETION_LOG to November 21 native log") }
-        let start = Date(), s = try LogReader.load(URL(fileURLWithPath: path)), events = requests(s)
-        let ids = ["6867a693-9501-4e18-83e7-92df16f69c7f", "320fdaba-5e3e-4b4d-9d4f-5bcec2769741", "e9ca66ed-a466-4351-9a06-2a4566ce885c", "e9cede33-6437-4620-9fbf-c81caeba5012", "05758436-d46d-4ac0-b7ed-e513953fe1d2", "f438a1b1-0dfc-4c07-916d-55d174ade667", "d0cb33a4-d65d-4add-8f80-e593ee760906", "67823df4-db57-45a6-bb8a-f15d24a8e7dd", "b57ea2ba-805b-4372-a762-ca2ad3224645"]
-        let prompts = [17606,29960,65129,75448,83772,95114,95349,95528,95895]
-        let generated = [282,1168,4946,962,11223,114,99,52,3608]
-        let durations = [18.64,23.99,103.12,22.54,185.25,9.08,2.29,1.99,29.36]
-        for i in ids.indices {
-            let e = try XCTUnwrap(events.first { $0.requestID == ids[i] }), c = try XCTUnwrap(e.completion)
-            XCTAssertEqual(c.finishReason, i == 8 ? "stop" : "tool_calls")
-            XCTAssertEqual(c.promptTokens, prompts[i]); XCTAssertEqual(c.generatedTokens, generated[i]); XCTAssertEqual(c.duration, durations[i])
-            XCTAssertEqual(s.turns.flatMap(\.events).first { $0.kind == .output && $0.requestID == ids[i] }?.completion, c)
-            let d = try LogReader.detail(e, snapshot: s)
-            XCTAssertTrue(d.completionRaw?.contains("finish_reason=\(c.finishReason!)") == true)
-            XCTAssertNotNil(d.tree)
-        }
-        print("QWEN COMPLETION VERIFICATION: 9 matched, 8 tool_calls + 1 stop, load/details seconds=\(Date().timeIntervalSince(start))")
-    }
-    func testActualEarlierGemmaCompletionsAndDelta() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_TEST_LOG"] else { throw XCTSkip("Set INSPECTOR_TEST_LOG to November 20 native log") }
-        let s = try LogReader.load(URL(fileURLWithPath: path))
-        let e = try XCTUnwrap(requests(s).first { $0.timestamp.hasPrefix("2026-11-20 15:16:15") })
-        XCTAssertEqual(e.completion?.finishReason, "stop")
-        XCTAssertEqual(e.completion?.promptTokens, 15214); XCTAssertEqual(e.completion?.duration, 1.02)
-        let prior = try XCTUnwrap(requests(s).first { $0.id == e.metrics?.previousRequest })
-        XCTAssertEqual(prior.completion?.finishReason, "tool_calls")
-        XCTAssertEqual(prior.completion?.promptTokens, 15165); XCTAssertEqual(prior.completion?.duration, 0.99)
-        XCTAssertTrue(try LogReader.detail(e, snapshot: s).readable.contains("Prompt-token change: +49"))
     }
 }

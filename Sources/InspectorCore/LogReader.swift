@@ -7,11 +7,12 @@ struct LogRecord: Sendable {
     var logger: String
     var level: String
     var body: String
+    var context: String = "-"
 }
 
 public enum LogReader {
     static let maximumRecord = 64 * 1024 * 1024
-    static let header = try! NSRegularExpression(pattern: #"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - ([A-Za-z0-9_.]+) - (TRACE|DEBUG|INFO|WARNING|ERROR|CRITICAL) - \[[^\]\r\n]*\] - (.*)$"#)
+    static let header = try! NSRegularExpression(pattern: #"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - ([A-Za-z0-9_.]+) - (TRACE|DEBUG|INFO|WARNING|ERROR|CRITICAL) - \[([^\]\r\n]*)\] - (.*)$"#)
     static func captures(_ pattern: String, _ value: String) -> [String]? {
         guard let r = try? NSRegularExpression(pattern: pattern), let m = r.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) else { return nil }
         return (1..<m.numberOfRanges).map { Range(m.range(at: $0), in: value).map { String(value[$0]) } ?? "" }

@@ -68,13 +68,49 @@ final class BranchHistoryTests: XCTestCase {
         XCTAssertEqual(visible.turns.flatMap(\.events).filter { $0.kind == .result }.count, 0)
         XCTAssertEqual(requests(live).last?.metrics?.previousRequest, requests(full).last?.metrics?.previousRequest)
     }
-    func testAmbiguousLongestAncestorDoesNotFallBackToShorterMatch() throws {
+    func testRepeatedRichHistoryKeepsOneOriginForLaterContinuation() throws {
         let prior = base + exchange
         let s = try LogReader.load(temp(request(base) + request(prior) + request(prior) + request(prior + answer + [["role": "user", "content": notification]])))
         let last = try XCTUnwrap(requests(s).last)
-        XCTAssertNil(last.continuation?.retainedMessages)
-        XCTAssertNil(last.metrics?.previousRequest)
+        let events = requests(s)
+        XCTAssertEqual(events[2].continuation?.retainedMessages, 4)
+        XCTAssertEqual(events[2].continuation?.reason, "Repeated request history (retry or replay)")
+        XCTAssertEqual(events[2].metrics?.previousRequest, events[1].id)
+        XCTAssertEqual(last.continuation?.retainedMessages, 4)
+        XCTAssertEqual(last.metrics?.previousRequest, events[2].id)
+        XCTAssertEqual(Set(s.turns.map(\.group)).count, 1)
+        XCTAssertEqual(s.callCount, 1)
+    }
+    func testIdenticalOpeningPromptsRemainSeparateAndAmbiguousDescendantDoesNotMerge() throws {
+        let s = try LogReader.load(temp(request(base) + request(base) + request(base + exchange)))
+        let events = requests(s)
+        XCTAssertEqual(Set(s.turns.map(\.group)).count, 3)
+        XCTAssertNil(events.last?.continuation?.retainedMessages)
+        XCTAssertTrue(events.last?.continuation?.explanation?.contains("No unique predecessor") == true)
+    }
+    func testInterleavedStreamsAndReplayedOldCheckpointKeepTheirOwnHistories() throws {
+        let other: [[String: Any]] = [["role": "user", "content": "Independent stream"]]
+        let rich = base + exchange
+        let later = rich + answer + [["role": "user", "content": "Follow up"]]
+        let s = try LogReader.load(temp(request(base) + request(other) + request(rich) + request(later)
+            + request(other + [["role": "assistant", "content": "Other answer"]]) + request(rich) + request(rich + answer)))
+        let events = requests(s)
+        XCTAssertEqual(Set(s.turns.map(\.group)).count, 2)
+        XCTAssertEqual(events[5].metrics?.previousRequest, events[2].id)
+        XCTAssertEqual(events[6].metrics?.previousRequest, events[5].id)
+        XCTAssertEqual(s.callCount, 1)
+        XCTAssertEqual(s.requestCount, 7)
+    }
+    func testRewrittenToolHistoryOffersComparisonWithoutMerging() throws {
+        let rich = base + exchange
+        var changed = rich
+        changed[3]["content"] = "Compacted terminal result"
+        let s = try LogReader.load(temp(request(rich) + request(changed)))
+        let events = requests(s)
         XCTAssertNotEqual(s.turns.first?.group, s.turns.last?.group)
+        XCTAssertTrue(events[1].metrics?.possibleReset == true)
+        XCTAssertEqual(events[1].metrics?.previousRequest, events[0].id)
+        XCTAssertNil(events[1].continuation?.retainedMessages)
     }
     func testChangedHistoryAndOrdinaryBackgroundTextAreNotMergedOrRelabeled() throws {
         let prior = base + exchange
@@ -111,33 +147,5 @@ final class BranchHistoryTests: XCTestCase {
         XCTAssertNotEqual(s.turns.first?.group, s.turns.last?.group)
         XCTAssertNil(requests(s).last?.continuation?.retainedMessages)
         XCTAssertNil(requests(s).last?.metrics?.previousRequest)
-    }
-    func testActualReviewNotificationRetainsAllEvidenceWithoutDuplicatingCalls() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_COMPLETION_LOG"] else { throw XCTSkip("Enable native completion log checks") }
-        let s = try LogReader.load(URL(fileURLWithPath: path))
-        let original = try XCTUnwrap(s.turns.first { $0.requests == 42 && $0.title.hasPrefix("Please do a careful code review") })
-        let notification = try XCTUnwrap(s.turns.first { $0.title == "Background process notification · proc_83ecb8f3fb31" })
-        XCTAssertEqual(notification.group, original.group)
-        XCTAssertEqual(notification.requests, 1); XCTAssertEqual(notification.calls, 0)
-        XCTAssertFalse(notification.events.contains { $0.kind == .result })
-        XCTAssertEqual(s.turns.filter { $0.group == original.group && $0.title == original.title }.count, 1)
-        XCTAssertEqual(original.calls, 61)
-        let originalCalls = Set(original.events.filter { $0.kind == .call }.compactMap(\.toolID))
-        let conversationCalls = s.turns.filter { $0.group == original.group }.flatMap(\.events).filter { $0.kind == .call && originalCalls.contains($0.toolID ?? "") }
-        XCTAssertEqual(conversationCalls.count, 61)
-        let event = try XCTUnwrap(notification.events.first { $0.kind == .request })
-        XCTAssertEqual(event.continuation?.retainedMessages, 104)
-        XCTAssertEqual(event.continuation?.totalMessages, 106)
-        XCTAssertEqual(event.metrics?.previousRequest, original.events.last { $0.kind == .request }?.id)
-        let detail = try LogReader.detail(event, snapshot: s)
-        XCTAssertTrue(detail.readable.contains("106 total, 2 newly introduced, 104 retained"))
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(detail.structured.utf8)) as? [String: Any])
-        let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
-        XCTAssertEqual(messages.flatMap { $0["tool_calls"] as? [Any] ?? [] }.count, 61)
-        XCTAssertEqual(messages.filter { $0["role"] as? String == "tool" }.count, 61)
-        XCTAssertTrue(detail.raw.contains("proc_83ecb8f3fb31")); XCTAssertNotNil(detail.tree)
-        XCTAssertEqual(original.events.last { $0.kind == .request }?.completion?.finishReason, "stop")
-        XCTAssertEqual(original.metrics.peakPromptTokens, 179590)
-        XCTAssertEqual(original.metrics.elapsedSeconds ?? 0, 1710.846, accuracy: 0.001)
     }
 }

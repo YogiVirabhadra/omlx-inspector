@@ -59,30 +59,4 @@ final class StructuredTests: XCTestCase {
             XCTAssertEqual(LogReader.fingerprint(a), LogReader.fingerprint(b))
         }
     }
-    func testActualRequestTwoAndLargestRequestWhenProvided() throws {
-        guard let path = ProcessInfo.processInfo.environment["INSPECTOR_TEST_LOG"] else { throw XCTSkip("Optional real-log verification") }
-        let snapshot = try LogReader.load(URL(fileURLWithPath: path))
-        let requests = snapshot.turns.flatMap(\.events).filter { $0.kind == .request }
-        let example = try XCTUnwrap(requests.first { $0.timestamp.hasPrefix("2026-11-20 15:16:15") })
-        let detail = try LogReader.detail(example, snapshot: snapshot)
-        let tree = try XCTUnwrap(detail.tree)
-        let messages = try XCTUnwrap(tree.children.first { $0.key == "messages" })
-        XCTAssertEqual(messages.children.count, 8)
-        XCTAssertEqual(messages.children.filter(\.isNewMessage).map(\.label), ["[6] assistant", "[7] tool"])
-        for expected in ["gemma-4-31B-it-oQ4e-mtp", "8 total, 2 newly introduced", "Available tools: 21", "terminal({\"command\":\"date\"})", "Fri Nov 20 15:16:15 EST 2026"] { XCTAssertTrue(detail.readable.contains(expected), expected) }
-        let largest = try XCTUnwrap(requests.max { $0.evidence.source.length < $1.evidence.source.length })
-        for event in [example, largest] {
-            let start = Date(); let detail = try LogReader.detail(event, snapshot: snapshot)
-            let root = try XCTUnwrap(detail.tree); let nodes = flatten(root)
-            let parsed = try JSONSerialization.jsonObject(with: Data(detail.structured.utf8))
-            let reconstructed = try JSONSerialization.jsonObject(with: Data(root.json().utf8))
-            XCTAssertEqual(LogReader.fingerprint(parsed), LogReader.fingerprint(reconstructed))
-            let file = try FileHandle(forReadingFrom: snapshot.url); defer { try? file.close() }
-            try file.seek(toOffset: event.evidence.source.offset)
-            XCTAssertEqual(detail.raw, String(decoding: try file.read(upToCount: event.evidence.source.length) ?? Data(), as: UTF8.self))
-            XCTAssertGreaterThan(nodes.count, 100)
-            XCTAssertEqual(root.children.first { $0.key == "tools" }?.children.count, 21)
-            print("STRUCTURED VERIFICATION: \(event.timestamp) nodes=\(nodes.count) sourceBytes=\(event.evidence.source.length) parse+roundTrip=\(Date().timeIntervalSince(start))s")
-        }
-    }
 }

@@ -54,7 +54,7 @@ extension EvidenceBuilder {
             if completionOpen == 0 { completionOverlap = false }
         }
         let explanation = retired
-            ? "Engine cancellation and completed cleanup share scheduler UUID \(id). Its incoming request association is inferred from the earlier isolated scheduler admission. The canceled lifetime was retired; no server finish reason or successful completion is inferred."
+            ? "Engine cancellation and completed cleanup share scheduler UUID \(id). Its incoming request association is inferred from the earlier unambiguous scheduler admission. The canceled lifetime was retired; no server finish reason or successful completion is inferred."
             : "Cancellation cleanup for scheduler UUID \(id) was observed, but its unresolved incoming lifetime could not be uniquely established. Completion associations remain conservative."
         if let location {
             turns[location.turn].events[location.event].note += " " + explanation

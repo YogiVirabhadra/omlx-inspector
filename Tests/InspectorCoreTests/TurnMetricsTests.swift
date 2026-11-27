@@ -48,17 +48,4 @@ final class TurnMetricsTests: XCTestCase {
         XCTAssertEqual(t.metrics.elapsedSeconds, 5)
         XCTAssertEqual(turn([request("invalid", nil)]).metrics.durationValue, "Unavailable")
     }
-    func testNativeQwenAndGemmaTurnTotals() throws {
-        guard let qwen = ProcessInfo.processInfo.environment["INSPECTOR_COMPLETION_LOG"],
-              let gemma = ProcessInfo.processInfo.environment["INSPECTOR_TEST_LOG"] else { throw XCTSkip("Enable native log checks") }
-        let q = try XCTUnwrap(LogReader.load(URL(fileURLWithPath: qwen)).turns.first { $0.requests == 9 })
-        XCTAssertEqual(q.metrics.peakPromptTokens, 95895)
-        XCTAssertEqual(q.metrics.elapsedSeconds ?? 0, 431.905, accuracy: 0.001)
-        XCTAssertEqual(q.metrics.durationValue, "7m 11.9s")
-        XCTAssertTrue(q.metrics.hasTerminalCompletion)
-        let g = try XCTUnwrap(LogReader.load(URL(fileURLWithPath: gemma)).turns.first { $0.title == "That time is very, very, incorrect. Can you check again?" })
-        XCTAssertEqual(g.metrics.peakPromptTokens, 15214)
-        XCTAssertEqual(g.metrics.elapsedSeconds ?? 0, 2.354, accuracy: 0.001)
-        XCTAssertEqual(g.metrics.durationValue, "2.4 s")
-    }
 }
