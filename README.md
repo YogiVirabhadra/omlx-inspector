@@ -21,15 +21,23 @@ No third-party packages or running database service are required.
 
 ## What it Looks Like
 
-### Per-Execution Log Trace
+### Per Execution Trace
+
+Associates multiple log records and tracks them throughout a turn
+
+
+
+![Logs](Images/Logs.png)
+
+## 
+
+### Per Log Record Trace
+
+Displays each individual record from the log and shows its interpreted or original source form 
 
 ![Executions](Images/Executions.png)
 
 
-
-### Per Log Record Trace
-
-![Logs](Images/Logs.png)
 
 ## Build and open
 
