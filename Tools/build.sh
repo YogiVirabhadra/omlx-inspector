@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
+source Tools/select_xcode.sh
 app="${INSPECTOR_BUILD_DIR:-$PWD/build}/oMLX Inspector.app"
 mkdir -p build "$app/Contents/MacOS" "$app/Contents/Resources"
 python3 Tools/source_files.py > build/swift-sources.list
