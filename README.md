@@ -8,7 +8,7 @@ Log output is read directly from the oMLX generated log file. Does not interfere
 
 The application reads existing logs; it does not submit inference requests or modify oMLX, agent configuration, or source log data.
 
-Version **0.3.0** provides both an execution timeline and a full log-record browser.
+Version **0.4.0** provides both an execution timeline and a full log-record browser.
 
 ## Requirements
 
