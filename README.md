@@ -2,7 +2,7 @@
 
 A native macOS utility for understanding local oMLX inference logs. Browse user turns, inference requests, model output, and reported tool calls and results, then inspect the original records behind them.
 
-I wrote this utility (with more than a little help from Claude, Codex, and Qwen) because I wanted to make it easier to decompose, read, and follow log records throughout a turn, but not lose any details. 
+I wrote this utility (with more than a little help from Claude, Codex, and Qwen) because I wanted to make it easier to decompose, read, and follow log records throughout a turn, but not lose any details.
 
 Log output is read directly from the oMLX generated log file. Does not interfere with oMLX output. Can read logs as they're written or after the fact.
 
@@ -21,23 +21,13 @@ No third-party packages or running database service are required.
 
 ## What it Looks Like
 
-### Per Execution Trace
+### Per-Execution Log Trace
 
-Associates multiple log records and tracks them throughout a turn
-
-
-
-![Logs](Images/Logs.png)
-
-## 
+![The Executions view: a user turn's timeline with the Inspector open](Images/Executions.png)
 
 ### Per Log Record Trace
 
-Displays each individual record from the log and shows its interpreted or original source form 
-
-![Executions](Images/Executions.png)
-
-
+![The Log Records view: every framed record with its structured fields](Images/Logs.png)
 
 ## Build and open
 
@@ -64,7 +54,7 @@ The script compiles the native application, assembles its bundle, and applies an
 
 ## Search and live monitoring
 
-- **⌘F** searches complete event content in Executions or complete source records in Log Records. Searches are literal and case-insensitive, with up to 200 matching results. Record searches respect level and logger filters.
+- **⌘F** searches complete event content in Executions or complete source records in Log Records. Searches are literal and ignore case and diacritics, with up to 200 matching results. Record searches respect level and logger filters.
 - **Monitor Log** reads appended data while the app is open. It defaults on; monitoring and following the newest activity are separate controls.
 - **Return to Live** (**⇧⌘L**) follows the newest indexed event. Selecting or browsing older activity pauses following while monitoring can continue.
 - **Clear Display** (**⌘K**) hides indexed activity and follows new activity without deleting any log data. **Show History** restores the full view. The cleared boundary is temporary.
@@ -90,16 +80,34 @@ Processing stays on your Mac. The app has no network or telemetry component, pri
 - Parsing depends on supported oMLX log syntax. Generated text that perfectly imitates a log header can make record boundaries ambiguous.
 - Export, automatic anomaly detection, and comprehensive accessibility validation are not included.
 
+## Learn more
+
+- [Evidence model](EVIDENCE.md): every inference rule, the evidence it requires, and what happens when that evidence is missing.
+- [Contributing](CONTRIBUTING.md): how this project is maintained, and how to build and test your own copy.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
 ## Development checks
 
-Run the core regression suite from the repository root:
+Run the core and app regression suites from the repository root:
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test -c release
 python3 Tools/test_source_files.py
+python3 Tools/check_format.py
 ```
 
-The public suite uses synthetic fixtures and requires no private logs. The large-file test below is opt-in and skipped unless explicitly enabled.
+Formatting follows the repository's `.swift-format` configuration. To reformat after editing:
+
+```sh
+xcrun swift-format format --in-place --recursive Package.swift Sources Tests Tools
+```
+
+The Xcode project is generated. After adding, removing, or renaming files under `Sources`, regenerate it with `python3 Tools/make_project.py` and commit the result; `Tools/validate.sh` fails if it is out of date.
+
+The public suites use synthetic fixtures and disposable preference domains, and require no private logs. App tests cover preference compatibility, search/display transitions, live updates, rotation, and native rendering of both browsing panes. The large-file test below is opt-in and skipped unless explicitly enabled.
 
 The optional large-file test creates and deletes a disposable log of about 2 GiB; allow sufficient free disk space:
 
@@ -107,3 +115,23 @@ The optional large-file test creates and deletes a disposable log of about 2 GiB
 INSPECTOR_LARGE_LOG_BYTES=2147483648 \
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test -c release
 ```
+
+For the complete local validation gate, including the 2 GiB test, formatting,
+source discovery, and a signed app build:
+
+```sh
+Tools/validate.sh --large
+```
+
+The tests need Xcode, not just the Command Line Tools. `validate.sh` uses `DEVELOPER_DIR` if you set
+it; otherwise it uses the `xcode-select` choice, falling back to `/Applications/Xcode.app` when that
+choice is the Command Line Tools.
+
+Omit `--large` for the routine gate. Set `INSPECTOR_SMOKE_OUTPUT` to an absolute
+scratch directory to retain native pane screenshots from the app tests. The
+build honors `DEVELOPER_DIR` and defaults to the host architecture;
+`INSPECTOR_BUILD_ARCH` can override the architecture when cross-compiling.
+
+The included GitHub Actions workflow runs the routine gate on pushes and pull
+requests, and the large-file gate weekly or on manual request. Hosted CI must
+be activated and verified in the destination repository before relying on it.

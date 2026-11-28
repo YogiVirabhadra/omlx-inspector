@@ -4,11 +4,13 @@ import XCTest
 final class TurnMetricsTests: XCTestCase {
     let source = SourceRef(offset: 0, length: 0, line: 1, endLine: 1)
     func request(_ time: String, _ prompt: Int?, finish: String? = nil, end: String? = nil) -> InspectorEvent {
-        var e = InspectorEvent(id: time, kind: .request, title: "Request", summary: "", timestamp: time,
-                               note: "", evidence: Evidence(source: source), metrics: RequestMetrics(promptTokens: prompt))
+        var e = InspectorEvent(
+            id: time, kind: .request, title: "Request", summary: "", timestamp: time,
+            note: "", evidence: Evidence(source: source), metrics: RequestMetrics(promptTokens: prompt))
         if let end {
-            e.completion = InferenceCompletion(model: "test", promptTokens: prompt ?? 0, generatedTokens: 20,
-                                                duration: 1, finishReason: finish, source: source, timestamp: end)
+            e.completion = InferenceCompletion(
+                model: "test", promptTokens: prompt ?? 0, generatedTokens: 20,
+                duration: 1, finishReason: finish, source: source, timestamp: end)
         }
         return e
     }

@@ -1,0 +1,73 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      large_file:
+        description: Include the 2 GiB synthetic log test
+        type: boolean
+        default: false
+  schedule:
+    - cron: '23 8 * * 1'
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ${{ vars.INSPECTOR_CI_RUNNER || 'xcode-27' }}
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm toolchain
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          xcrun --show-sdk-version
+      - name: Validate locally reproducible checks
+        env:
+          INSPECTOR_SMOKE_OUTPUT: ${{ runner.temp }}/inspector-validation/screenshots
+          RUN_LARGE: ${{ github.event_name == 'schedule' || inputs.large_file }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/inspector-validation"
+          if [[ "$RUN_LARGE" == 'true' ]]; then
+            Tools/validate.sh --large 2>&1 | tee "$RUNNER_TEMP/inspector-validation/validation.txt"
+          else
+            Tools/validate.sh 2>&1 | tee "$RUNNER_TEMP/inspector-validation/validation.txt"
+          fi
+      - name: Check changed Swift files and whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$BASE_SHA" && "$BASE_SHA" != '0000000000000000000000000000000000000000' ]]; then
+            if git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              python3 Tools/check_format.py --base "$BASE_SHA"
+              git diff --check "$BASE_SHA" HEAD
+            else
+              echo 'Previous revision unavailable; adopted formatting scope was checked by validate.sh.'
+            fi
+          fi
+      - name: Retain synthetic validation results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inspector-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/inspector-validation
+          if-no-files-found: warn
+          retention-days: 7

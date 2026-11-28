@@ -19,7 +19,8 @@ public struct InferenceCompletion: Sendable, Equatable {
         case "content_filter": "Content filter"
         case "function_call": "Function call"
         case .none: "Finish unavailable"
-        default: finishReason!.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ").capitalized
+        case let reason?:
+            reason.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
     public var status: String {
@@ -36,15 +37,16 @@ public struct InferenceCompletion: Sendable, Equatable {
     }
 
     static func parse(_ record: LogRecord) -> InferenceCompletion? {
-        guard record.logger == "omlx.server", record.level == "INFO",
-              let parts = LogReader.captures(#"^Chat completion: model=([^,]+), (\d+) tokens in ([0-9]+(?:\.[0-9]+)?)s \([^\r\n]*?\), prompt: (\d+)(?:,|$)"#, record.body),
-              let generated = Int(parts[1]), let duration = Double(parts[2]), duration.isFinite,
-              let prompt = Int(parts[3]) else { return nil }
-        let value = LogReader.captures(#"(?:^|,\s*)finish_reason=([^,\r\n]*)"#, record.body)?.first?.trimmingCharacters(in: .whitespaces)
+        guard let parts = LogGrammar.completionFields.captures(in: record),
+            let generated = Int(parts[1]), let duration = Double(parts[2]), duration.isFinite,
+            let prompt = Int(parts[3])
+        else { return nil }
+        let value = LogGrammar.finishReason.captures(in: record.body)?.first?.trimmingCharacters(in: .whitespaces)
         let reason = value.flatMap { ["", "none", "null", "unavailable"].contains($0.lowercased()) ? nil : $0 }
-        return InferenceCompletion(model: parts[0].trimmingCharacters(in: .whitespaces), promptTokens: prompt,
-                                   generatedTokens: generated, duration: duration, finishReason: reason,
-                                   source: record.source, timestamp: record.timestamp)
+        return InferenceCompletion(
+            model: parts[0].trimmingCharacters(in: .whitespaces), promptTokens: prompt,
+            generatedTokens: generated, duration: duration, finishReason: reason,
+            source: record.source, timestamp: record.timestamp)
     }
 }
 
@@ -60,8 +62,10 @@ extension EvidenceBuilder {
 
     private mutating func rejectCompletion(_ record: LogRecord, reason: String) {
         // Preserve the source in existing, unattributed diagnostics; never add it to an inference cycle.
-        diagnostic(record, title: "Unassociated completion summary",
-                   note: reason + " Original INFO evidence is available in Source; no request association or outcome is inferred.")
+        diagnostic(
+            record, title: "Unassociated completion summary",
+            note: reason
+                + " Original INFO evidence is available in Source; no request association or outcome is inferred.")
         warn(reason + " See Log diagnostics for the original INFO record.")
     }
 
@@ -80,9 +84,11 @@ extension EvidenceBuilder {
         // Keep all overlapping HTTP lifetimes ambiguous, including a new request
         // arriving after scheduler finish but before the preceding server summary.
         guard completionOpen == 1, !completionOverlap, active.isEmpty, pending.isEmpty,
-              let window = completionWindow, window.schedulerID != nil,
-              let finished = window.finishedAt, let outputTime = window.outputAt, let outputIndex = window.outputEvent else {
-            let reason = completionOpen == 0
+            let window = completionWindow, window.schedulerID != nil,
+            let finished = window.finishedAt, let outputTime = window.outputAt, let outputIndex = window.outputEvent
+        else {
+            let reason =
+                completionOpen == 0
                 ? "No open incoming request could be associated with this server completion."
                 : completionOpen > 1 || completionOverlap
                     ? "Overlapping or unresolved request lifetimes prevent a reliable completion association."
@@ -92,15 +98,21 @@ extension EvidenceBuilder {
         }
         let request = turns[window.turn].events[window.event]
         guard request.metrics?.model == completion.model,
-              request.metrics?.promptTokens == completion.promptTokens,
-              request.metrics?.generatedTokens == completion.generatedTokens,
-              let outputDelay = Self.elapsed(outputTime, record.timestamp), (0...5).contains(outputDelay),
-              let finishedDelay = Self.elapsed(finished, outputTime), finishedDelay >= 0,
-              let requestDuration = Self.elapsed(request.timestamp, record.timestamp),
-              completion.duration <= requestDuration + 0.02,
-              let schedulerDuration = request.metrics?.elapsedSeconds,
-              completion.duration + 0.02 >= schedulerDuration else {
-            rejectCompletion(record, reason: "The server completion could not be reliably associated; model, token counts, or timing did not agree.")
+            request.metrics?.promptTokens == completion.promptTokens,
+            request.metrics?.generatedTokens == completion.generatedTokens,
+            let outputDelay = Self.elapsedSeconds(from: outputTime, to: record.timestamp),
+            (0...5).contains(outputDelay),
+            let finishedDelay = Self.elapsedSeconds(from: finished, to: outputTime), finishedDelay >= 0,
+            let requestDuration = Self.elapsedSeconds(from: request.timestamp, to: record.timestamp),
+            completion.duration <= requestDuration + 0.02,
+            let schedulerDuration = request.metrics?.elapsedSeconds,
+            completion.duration + 0.02 >= schedulerDuration
+        else {
+            rejectCompletion(
+                record,
+                reason:
+                    "The server completion could not be reliably associated; model, token counts, or timing did not agree."
+            )
             return
         }
         turns[window.turn].events[window.event].completion = completion

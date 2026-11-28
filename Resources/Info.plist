@@ -3,7 +3,7 @@
 <plist version="1.0"><dict>
 <key>CFBundleDisplayName</key><string>oMLX Inspector</string>
 <key>CFBundleName</key><string>oMLX Inspector</string>
-<key>CFBundleIdentifier</key><string>local.omlx.inspector</string>
+<key>CFBundleIdentifier</key><string>io.github.yogivirabhadra.omlx-inspector</string>
 <key>CFBundleExecutable</key><string>oMLX Inspector</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.3.0</string>

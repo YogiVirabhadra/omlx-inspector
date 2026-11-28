@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 #if SWIFT_PACKAGE
-import InspectorCore
+    import InspectorCore
 #endif
 
 /// Stored by event in the workspace, independently of the currently displayed representation.
@@ -22,14 +22,16 @@ struct StructuredInspector: View {
     }
     @State private var value = ""
     @State private var valueReady = false
-    @State private var visibleCharacters = 80000
+    @State private var visibleCharacters = Workspace.textPageCharacters
     var body: some View {
         VSplitView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Text("Select a field to read its complete value.")
                     Spacer(minLength: 0)
-                    if root.children.first(where: { $0.key == "messages" })?.children.contains(where: \.isNewMessage) == true {
+                    if root.children.first(where: { $0.key == "messages" })?.children.contains(where: \.isNewMessage)
+                        == true
+                    {
                         Text("NEW = added context").foregroundStyle(.teal)
                     }
                 }.font(.system(size: 10)).foregroundStyle(.secondary).padding(10)
@@ -48,7 +50,8 @@ struct StructuredInspector: View {
                         Button("Copy value") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(value, forType: .string)
-                        }.controlSize(.small).disabled(!valueReady).help("Copy this field's complete value, including text not yet displayed")
+                        }.controlSize(.small).disabled(!valueReady).help(
+                            "Copy this field's complete value, including text not yet displayed")
                     }.padding(10)
                     Divider()
                     if valueReady {
@@ -57,10 +60,13 @@ struct StructuredInspector: View {
                             HStack {
                                 Text("More content is available.").font(.caption).foregroundStyle(.secondary)
                                 Spacer()
-                                Button("Load more") { visibleCharacters += 80000 }.controlSize(.small)
+                                Button("Load more") { visibleCharacters += Workspace.textPageCharacters }.controlSize(
+                                    .small)
                             }.padding(10)
                         }
-                    } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+                    } else {
+                        ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     VStack(spacing: 9) {
                         Image(systemName: "list.bullet.indent").font(.title2).foregroundStyle(.teal)
@@ -72,30 +78,49 @@ struct StructuredInspector: View {
             }.frame(minHeight: 160, idealHeight: 230, maxHeight: .infinity)
         }
         .task(id: selected?.id) {
-            valueReady = false; value = ""; visibleCharacters = 80000
+            valueReady = false
+            value = ""
+            visibleCharacters = Workspace.textPageCharacters
             guard let selected else { return }
             let complete = await Task.detached(priority: .userInitiated) { selected.completeText }.value
             guard !Task.isCancelled else { return }
-            value = complete; valueReady = true
+            value = complete
+            valueReady = true
         }
     }
 }
 
+/// An `NSOutlineView` over a ``StructuredValue`` tree. Rows are created lazily, so very large
+/// payloads stay responsive. Expansion and selection are mirrored into ``StructuredViewState``.
 struct NativeOutline: NSViewRepresentable {
     let root: StructuredValue
     let state: StructuredViewState
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autohidesScrollers = true
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
         let outline = NSOutlineView()
-        let field = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("field")); field.title = "Field"; field.width = 205; field.minWidth = 150
-        let preview = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("preview")); preview.title = "Value preview"; preview.width = 230; preview.minWidth = 120
-        outline.addTableColumn(field); outline.addTableColumn(preview); outline.outlineTableColumn = field
+        let field = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("field"))
+        field.title = "Field"
+        field.width = 205
+        field.minWidth = 150
+        let preview = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("preview"))
+        preview.title = "Value preview"
+        preview.width = 230
+        preview.minWidth = 120
+        outline.addTableColumn(field)
+        outline.addTableColumn(preview)
+        outline.outlineTableColumn = field
         outline.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
-        outline.rowHeight = 28; outline.indentationPerLevel = 14
-        outline.usesAlternatingRowBackgroundColors = true; outline.allowsMultipleSelection = false
+        outline.rowHeight = 28
+        outline.indentationPerLevel = 14
+        outline.usesAlternatingRowBackgroundColors = true
+        outline.allowsMultipleSelection = false
         outline.style = .fullWidth
-        outline.dataSource = context.coordinator; outline.delegate = context.coordinator
+        outline.dataSource = context.coordinator
+        outline.delegate = context.coordinator
         outline.setAccessibilityLabel("Structured evidence hierarchy")
         scroll.documentView = outline
         return scroll
@@ -133,7 +158,10 @@ struct NativeOutline: NSViewRepresentable {
         var root: StructuredValue?
         let state: StructuredViewState
         var restoring = false
-        var roots: [StructuredValue] { guard let root else { return [] }; return root.kind == .object ? root.children : [root] }
+        var roots: [StructuredValue] {
+            guard let root else { return [] }
+            return root.kind == .object ? root.children : [root]
+        }
         init(state: StructuredViewState) { self.state = state }
         func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
             (item as? StructuredValue)?.children.count ?? roots.count
@@ -145,28 +173,44 @@ struct NativeOutline: NSViewRepresentable {
         func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
             (item as? StructuredValue)?.children.isEmpty == false
         }
-        func outlineView(_ outlineView: NSOutlineView, objectValueFor tableColumn: NSTableColumn?, byItem item: Any?) -> Any? {
+        func outlineView(_ outlineView: NSOutlineView, objectValueFor tableColumn: NSTableColumn?, byItem item: Any?)
+            -> Any?
+        {
             guard let node = item as? StructuredValue else { return nil }
             return tableColumn?.identifier.rawValue == "field" ? node.label : node.preview
         }
         func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
             guard let node = item as? StructuredValue, let column = tableColumn else { return nil }
             let isField = column.identifier.rawValue == "field"
-            let cell = (outlineView.makeView(withIdentifier: column.identifier, owner: self) as? OutlineCell) ?? OutlineCell()
+            let cell =
+                (outlineView.makeView(withIdentifier: column.identifier, owner: self) as? OutlineCell) ?? OutlineCell()
             cell.identifier = column.identifier
             let text: NSTextField
-            if let existing = cell.textField { text = existing }
-            else {
-                text = NSTextField(labelWithString: ""); text.translatesAutoresizingMaskIntoConstraints = false
+            if let existing = cell.textField {
+                text = existing
+            } else {
+                text = NSTextField(labelWithString: "")
+                text.translatesAutoresizingMaskIntoConstraints = false
                 text.lineBreakMode = .byTruncatingTail
-                cell.addSubview(text); cell.textField = text
-                NSLayoutConstraint.activate([text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 3), text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+                cell.addSubview(text)
+                cell.textField = text
+                NSLayoutConstraint.activate([
+                    text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 3),
+                    text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                    text.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+                ])
             }
             text.stringValue = isField ? node.label + (node.isNewMessage ? "  • NEW" : "") : node.preview
-            text.font = isField ? .systemFont(ofSize: 11, weight: node.isNewMessage ? .semibold : .regular) : .monospacedSystemFont(ofSize: 10, weight: .regular)
+            text.font =
+                isField
+                ? .systemFont(ofSize: 11, weight: node.isNewMessage ? .semibold : .regular)
+                : .monospacedSystemFont(ofSize: 10, weight: .regular)
             cell.normalColor = isField ? (node.isNewMessage ? .systemTeal : .labelColor) : .secondaryLabelColor
             text.setAccessibilityLabel(text.stringValue)
-            cell.toolTip = isField ? node.id + (node.isNewMessage ? " · Newly introduced since the preceding inference" : "") : node.preview
+            cell.toolTip =
+                isField
+                ? node.id + (node.isNewMessage ? " · Newly introduced since the preceding inference" : "")
+                : node.preview
             return cell
         }
         func outlineViewSelectionDidChange(_ notification: Notification) {

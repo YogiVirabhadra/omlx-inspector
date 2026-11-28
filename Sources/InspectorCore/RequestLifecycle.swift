@@ -7,7 +7,9 @@ extension EvidenceBuilder {
         for id in active {
             guard let location = scheduler[id] else { continue }
             let metrics = turns[location.turn].events[location.event].metrics
-            if completion == nil || (completion?.model == metrics?.model && completion?.promptTokens == metrics?.promptTokens) {
+            if completion == nil
+                || (completion?.model == metrics?.model && completion?.promptTokens == metrics?.promptTokens)
+            {
                 uncertainActiveCompletions.insert(id)
             }
         }
@@ -17,21 +19,20 @@ extension EvidenceBuilder {
         // This engine message comes from the generator's finally block when it did
         // not finish normally. A scheduler's "Enqueued deferred abort" alone does
         // not establish either an ended generator or completed cleanup.
-        if record.logger == "omlx.engine.vlm", record.level == "INFO",
-           let id = LogReader.captures(#"^\[vlm_stream_generate\] Aborting request ([A-Za-z0-9_-]+)$"#, record.body)?.first {
+        if let id = LogGrammar.engineAbort.captures(in: record)?.first {
             if cancellationStarts[id] == nil { cancellationStarts[id] = record.source }
             return true
         }
-        if record.logger == "omlx.scheduler", record.level == "DEBUG",
-           let id = LogReader.captures(#"^Aborted request ([A-Za-z0-9_-]+)$"#, record.body)?.first {
+        if let id = LogGrammar.schedulerAbort.captures(in: record)?.first {
             retireCancelledRequest(id, record: record)
             return true
         }
-        if record.logger == "omlx.engine_core", record.level == "DEBUG",
-           let parts = LogReader.captures(#"^Reaped (\d+) orphaned output collector\(s\) after disconnect: (\[[^\r\n]*\])$"#, record.body),
-           let ids = try? JSONSerialization.jsonObject(with: Data(parts[1].replacingOccurrences(of: "'", with: "\"").utf8)) as? [String],
-           ids.count == Int(parts[0]), Set(ids).count == ids.count,
-           ids.allSatisfy({ LogReader.captures(#"^([A-Za-z0-9_-]+)$"#, $0) != nil }) {
+        if let parts = LogGrammar.orphanCleanup.captures(in: record),
+            let ids = try? JSONSerialization.jsonObject(
+                with: Data(parts[1].replacingOccurrences(of: "'", with: "\"").utf8)) as? [String],
+            ids.count == Int(parts[0]), Set(ids).count == ids.count,
+            ids.allSatisfy({ LogGrammar.requestID.captures(in: $0) != nil })
+        {
             for id in ids { retireCancelledRequest(id, record: record) }
             return true
         }
@@ -43,7 +44,7 @@ extension EvidenceBuilder {
         guard active.remove(id) != nil else { return }
         let start = cancellationStarts.removeValue(forKey: id)
         let uncertain = uncertainActiveCompletions.remove(id) != nil
-        guard let start else { return } // Finished collector alone does not prove cancellation.
+        guard let start else { return }  // Finished collector alone does not prove cancellation.
         let location = scheduler[id]
         let retired = location != nil && !uncertain && completionOpen > 0
         if retired {
@@ -53,14 +54,19 @@ extension EvidenceBuilder {
             completionWindow = nil
             if completionOpen == 0 { completionOverlap = false }
         }
-        let explanation = retired
+        let explanation =
+            retired
             ? "Engine cancellation and completed cleanup share scheduler UUID \(id). Its incoming request association is inferred from the earlier unambiguous scheduler admission. The canceled lifetime was retired; no server finish reason or successful completion is inferred."
             : "Cancellation cleanup for scheduler UUID \(id) was observed, but its unresolved incoming lifetime could not be uniquely established. Completion associations remain conservative."
         if let location {
             turns[location.turn].events[location.event].note += " " + explanation
         }
-        diagnostic(record, title: "Canceled request cleanup",
-                   note: explanation + " Engine abort evidence begins at line \(start.line). Source shows the original cleanup record.")
+        // One cleanup record can retire several requests; the request ID keeps event IDs unique.
+        diagnostic(
+            record, title: "Canceled request cleanup",
+            note: explanation
+                + " Engine abort evidence begins at line \(start.line). Source shows the original cleanup record.",
+            discriminator: id)
         if !retired { warn(explanation) }
     }
 }
